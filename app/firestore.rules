@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Aturan Global: Izinkan read/write untuk semua user yang sudah login
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+
+    // CONTOH ATURAN KHUSUS SUPER ADMIN (Opsional)
+    // Jika nanti Anda ingin membatasi agar hanya ali@gmail.com yang bisa edit data company:
+    // match /companies/{companyId} {
+    //   allow read: if request.auth != null;
+    //   allow write: if request.auth.token.email == 'ali@gmail.com';
+    // }
+  }
+}
