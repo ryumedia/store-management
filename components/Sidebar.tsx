@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { signOut } from "firebase/auth";
+import { signOut, User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 // Anda bisa menggunakan ikon dari library seperti lucide-react
 // npm install lucide-react
@@ -20,7 +20,7 @@ import {
   ChevronDown, // Dropdown arrow
 } from "lucide-react";
 
-const Sidebar = () => {
+const Sidebar = ({ user }: { user: User | null }) => {
   const pathname = usePathname();
 
   const handleLogout = async () => {
@@ -32,10 +32,10 @@ const Sidebar = () => {
     }
   };
 
-  const menuItems = [
+  const allMenuItems = [
     { name: "Dashboard", icon: LayoutDashboard, path: "/" },
-    { name: "Data Company", icon: Building2, path: "/company" },
-    { name: "Data User", icon: UserCog, path: "/user" },
+    { name: "Data Company", icon: Building2, path: "/company", adminOnly: true },
+    { name: "Data User", icon: UserCog, path: "/user", adminOnly: true },
     { name: "Produk", icon: Package, path: "/produk" },
     {
       name: "Data Stok",
@@ -50,6 +50,10 @@ const Sidebar = () => {
     { name: "Pesanan", icon: ShoppingCart, path: "/orders" },
     { name: "Pelanggan", icon: Users, path: "/customers" },
   ];
+
+  const isSuperAdmin = user?.email === 'ali@gmail.com';
+
+  const menuItems = allMenuItems.filter(item => !item.adminOnly || isSuperAdmin);
 
   const [openMenus, setOpenMenus] = useState(() => {
     const initialState: { [key: string]: boolean } = {};

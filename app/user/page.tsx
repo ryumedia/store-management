@@ -3,17 +3,36 @@
 import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
 import { db, app } from '@/lib/firebase';
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { initializeApp, getApp, getApps } from 'firebase/app';
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
+import { getAuth, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { useRouter } from 'next/navigation';
+import { initializeApp, getApps } from 'firebase/app';
+
+interface UserDocument {
+  id: string;
+  name: string;
+  email: string;
+  companyId: string;
+  role: string;
+  status: 'Aktif' | 'Non-Aktif';
+  createdAt: Timestamp;
+}
+
+interface Company {
+  id: string;
+  name: string;
+}
 
 export default function UserPage() {
-  const [users, setUsers] = useState<any[]>([]);
-  const [companies, setCompanies] = useState<any[]>([]);
+  const [users, setUsers] = useState<UserDocument[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const router = useRouter();
   
   const [formData, setFormData] = useState({
     name: '',
@@ -24,15 +43,29 @@ export default function UserPage() {
     status: 'Aktif'
   });
 
+  useEffect(() => {
+    const mainAuth = getAuth(app);
+    const unsubscribe = onAuthStateChanged(mainAuth, (user) => {
+      if (user && user.email === 'ali@gmail.com') {
+        setIsSuperAdmin(true);
+      } else {
+        router.push('/');
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, [router]);
+
   // Fetch Users Realtime
   useEffect(() => {
+    if (!isSuperAdmin) return;
     const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const userList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      setUsers(userList);
+      setUsers(userList as UserDocument[]);
       setLoading(false);
     }, (error) => {
       console.error("Error fetching users:", error);
@@ -40,20 +73,21 @@ export default function UserPage() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [isSuperAdmin]);
 
   // Fetch Companies untuk Dropdown
   useEffect(() => {
+    if (!isSuperAdmin) return;
     const q = query(collection(db, 'companies'), orderBy('name', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const companyList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      setCompanies(companyList);
+      setCompanies(companyList as Company[]);
     });
     return () => unsubscribe();
-  }, []);
+  }, [isSuperAdmin]);
 
   // Helper untuk mendapatkan nama company berdasarkan ID
   const getCompanyName = (id: string) => {
@@ -62,7 +96,7 @@ export default function UserPage() {
   };
 
   // Handle Open Modal
-  const handleOpenModal = (user?: any) => {
+  const handleOpenModal = (user?: UserDocument) => {
     if (user) {
       setEditingId(user.id);
       setFormData({
@@ -116,7 +150,7 @@ export default function UserPage() {
           await signOut(secondaryAuth);
         } catch (authError: any) {
           console.error("Auth Error:", authError);
-          alert("Gagal membuat akun login: " + authError.message);
+          alert("Gagal membuat akun login: " + (authError as Error).message);
           setIsSubmitting(false);
           return;
         }
@@ -149,6 +183,14 @@ export default function UserPage() {
       }
     }
   };
+
+  if (authLoading) {
+    return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  }
+
+  if (!isSuperAdmin) {
+    return <div className="flex items-center justify-center h-screen">Access Denied</div>;
+  }
 
   return (
     <div className="space-y-6">

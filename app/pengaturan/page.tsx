@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
-import { db } from '@/lib/firebase';
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase';
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, where, getDocs } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('Brand');
@@ -13,6 +14,8 @@ export default function SettingsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [userCompanyId, setUserCompanyId] = useState<string | null>(null);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -21,6 +24,26 @@ export default function SettingsPage() {
     status: 'Aktif',
     companyId: ''
   });
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        if (user.email === 'ali@gmail.com') {
+          setIsSuperAdmin(true);
+        } else {
+          const usersRef = collection(db, "users");
+          const q = query(usersRef, where("uid", "==", user.uid));
+          const querySnapshot = await getDocs(q);
+          if (!querySnapshot.empty) {
+            const userDoc = querySnapshot.docs[0].data();
+            setUserCompanyId(userDoc.companyId);
+          }
+        }
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Mapping nama tab ke nama koleksi di Firestore
   const getCollectionName = (tab: string) => {
@@ -51,22 +74,31 @@ export default function SettingsPage() {
   useEffect(() => {
     setLoading(true);
     const colName = getCollectionName(activeTab);
-    const q = query(collection(db, colName), orderBy('createdAt', 'desc'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setData(list);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching data:", error);
-      setLoading(false);
-    });
+    let dataQuery = query(collection(db, colName), orderBy('createdAt', 'desc'));
 
-    return () => unsubscribe();
-  }, [activeTab]);
+    if (isSuperAdmin || userCompanyId) {
+      if (!isSuperAdmin) {
+        dataQuery = query(dataQuery, where('companyId', '==', userCompanyId));
+      }
+      
+      const unsubscribe = onSnapshot(dataQuery, (snapshot) => {
+        const list = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setData(list);
+        setLoading(false);
+      }, (error) => {
+        console.error("Error fetching data:", error);
+        setLoading(false);
+      });
+
+      return () => unsubscribe();
+    } else if (!loading) {
+      setLoading(false);
+      setData([]);
+    }
+  }, [activeTab, isSuperAdmin, userCompanyId]);
 
   // Helper untuk mendapatkan nama company berdasarkan ID
   const getCompanyName = (id: string) => {
@@ -82,7 +114,7 @@ export default function SettingsPage() {
         initial: item.initial,
         code: item.code || '',
         status: item.status || 'Aktif',
-        companyId: item.companyId || ''
+        companyId: ''
       });
     } else {
       setEditingId(null);
@@ -105,7 +137,7 @@ export default function SettingsPage() {
     try {
       const dataToSave: any = {
         name: formData.name,
-        companyId: formData.companyId,
+        companyId: isSuperAdmin ? formData.companyId : userCompanyId,
       };
       
       if (activeTab === 'Platform') {
@@ -261,6 +293,7 @@ export default function SettingsPage() {
             </div>
             
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              {isSuperAdmin && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
                 <select
@@ -273,6 +306,7 @@ export default function SettingsPage() {
                   {companies.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
                 </select>
               </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Nama {activeTab}</label>
                 <input

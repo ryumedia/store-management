@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
@@ -11,7 +11,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -39,7 +39,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   // Jika di halaman lain (Dashboard), tampilkan dengan Sidebar & Navbar
   return (
     <div className="flex h-screen">
-      <Sidebar />
+      <Sidebar user={user} />
       <main className="flex-1 flex flex-col overflow-hidden">
         <Navbar />
         <div className="flex-1 overflow-y-auto p-6">

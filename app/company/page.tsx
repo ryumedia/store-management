@@ -2,15 +2,29 @@
 
 import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, X } from 'lucide-react';
-import { db } from '@/lib/firebase';
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { useRouter } from 'next/navigation';
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
+
+interface Company {
+  id: string;
+  name: string;
+  address: string;
+  category: string;
+  status: 'Aktif' | 'Non-Aktif';
+  createdAt: Timestamp;
+}
 
 export default function CompanyPage() {
-  const [companies, setCompanies] = useState<any[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const router = useRouter();
   
   const [formData, setFormData] = useState({
     name: '',
@@ -19,15 +33,28 @@ export default function CompanyPage() {
     status: 'Aktif'
   });
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user && user.email === 'ali@gmail.com') {
+        setIsSuperAdmin(true);
+      } else {
+        router.push('/');
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, [router]);
+
   // Fetch Data Realtime dari Firestore
   useEffect(() => {
+    if (!isSuperAdmin) return;
     const q = query(collection(db, 'companies'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const companyList = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      setCompanies(companyList);
+      setCompanies(companyList as Company[]);
       setLoading(false);
     }, (error) => {
       console.error("Error fetching companies:", error);
@@ -35,10 +62,10 @@ export default function CompanyPage() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [isSuperAdmin]);
 
   // Handle Open Modal (Add/Edit)
-  const handleOpenModal = (company?: any) => {
+  const handleOpenModal = (company?: Company) => {
     if (company) {
       setEditingId(company.id);
       setFormData({
@@ -99,6 +126,14 @@ export default function CompanyPage() {
       }
     }
   };
+
+  if (authLoading) {
+    return <div className="flex items-center justify-center h-screen">Loading...</div>;
+  }
+
+  if (!isSuperAdmin) {
+    return <div className="flex items-center justify-center h-screen">Access Denied</div>;
+  }
 
   return (
     <div className="space-y-6">

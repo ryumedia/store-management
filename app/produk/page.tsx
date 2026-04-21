@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, X, RefreshCw } from 'lucide-react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, query, orderBy, doc, deleteDoc, addDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase';
+import { collection, onSnapshot, query, orderBy, doc, deleteDoc, addDoc, serverTimestamp, updateDoc, where, getDocs } from 'firebase/firestore';
+import { onAuthStateChanged, User } from 'firebase/auth';
 
 export default function ProductPage() {
   const [products, setProducts] = useState<any[]>([]);
@@ -12,6 +13,8 @@ export default function ProductPage() {
   const [colors, setColors] = useState<any[]>([]);
   const [sizes, setSizes] = useState<any[]>([]);
   const [companies, setCompanies] = useState<any[]>([]);
+  const [userCompanyId, setUserCompanyId] = useState<string | null>(null);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -27,13 +30,55 @@ export default function ProductPage() {
     minQty: 0,
     hpp: 0,
     price: 0,
-    companyId: ''
+    companyId: '',
   });
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        if (user.email === 'ali@gmail.com') {
+          setIsSuperAdmin(true);
+        } else {
+          const usersRef = collection(db, "users");
+          const q = query(usersRef, where("uid", "==", user.uid));
+          const querySnapshot = await getDocs(q);
+          if (!querySnapshot.empty) {
+            const userDoc = querySnapshot.docs[0].data();
+            setUserCompanyId(userDoc.companyId);
+          }
+        }
+        setLoading(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch Companies untuk Dropdown (hanya untuk super admin)
+  useEffect(() => {
+    if (isSuperAdmin) {
+      const q = query(collection(db, 'companies'), orderBy('name', 'asc'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const companyList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setCompanies(companyList);
+      });
+      return () => unsubscribe();
+    }
+  }, [isSuperAdmin]);
 
   // Fetch Products Realtime
   useEffect(() => {
-    const q = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    if (loading) return;
+
+    let productsQuery = query(collection(db, 'products'), orderBy('createdAt', 'desc'));
+
+    if (!isSuperAdmin && userCompanyId) {
+      productsQuery = query(productsQuery, where('companyId', '==', userCompanyId));
+    }
+
+    const unsubscribe = onSnapshot(productsQuery, (snapshot) => {
       const list = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -46,20 +91,7 @@ export default function ProductPage() {
     });
 
     return () => unsubscribe();
-  }, []);
-
-  // Fetch Companies untuk Dropdown
-  useEffect(() => {
-    const q = query(collection(db, 'companies'), orderBy('name', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const companyList = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setCompanies(companyList);
-    });
-    return () => unsubscribe();
-  }, []);
+  }, [loading, isSuperAdmin, userCompanyId]);
 
   // Fetch Data Pengaturan (Brands, Models, Colors, Sizes)
   useEffect(() => {
@@ -101,12 +133,6 @@ export default function ProductPage() {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(amount);
   };
 
-  // Helper untuk mendapatkan nama company berdasarkan ID
-  const getCompanyName = (id: string) => {
-    const company = companies.find(c => c.id === id);
-    return company ? company.name : '-';
-  };
-
   const handleOpenModal = (product?: any) => {
     if (product) {
       // Mode Edit
@@ -129,7 +155,7 @@ export default function ProductPage() {
         brandId: '', modelId: '', colorId: '', sizeId: '',
         sequenceNumber: '',
         minQty: 0, hpp: 0, price: 0,
-        companyId: ''
+        companyId: '',
       });
     }
     setIsModalOpen(true);
@@ -185,7 +211,7 @@ export default function ProductPage() {
           colorId: formData.colorId,
           sizeId: formData.sizeId,
           sequenceNumber: formData.sequenceNumber,
-          companyId: formData.companyId,
+          companyId: isSuperAdmin ? formData.companyId : userCompanyId,
       };
 
       if (editingId) {
@@ -214,7 +240,7 @@ export default function ProductPage() {
         minQty: 0,
         hpp: 0,
         price: 0,
-        companyId: ''
+        companyId: '',
       });
     } catch (error) {
       console.error("Error adding product: ", error);
@@ -244,7 +270,6 @@ export default function ProductPage() {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">No</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item Code</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Min QTY</th>
@@ -263,7 +288,6 @@ export default function ProductPage() {
                   <tr key={product.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{index + 1}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.name}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{getCompanyName(product.companyId)}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.sku || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.itemCode || '-'}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.minQty || 0}</td>
@@ -293,19 +317,20 @@ export default function ProductPage() {
             </div>
             
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
-              {/* Bagian Pilihan Atribut */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
-                <select
-                  required
-                  value={formData.companyId}
-                  onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-secondary focus:border-transparent"
-                >
-                  <option value="">Pilih Company</option>
-                  {companies.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
-                </select>
-              </div>
+              {isSuperAdmin && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
+                  <select
+                    required
+                    value={formData.companyId}
+                    onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-secondary focus:border-transparent"
+                  >
+                    <option value="">Pilih Company</option>
+                    {companies.map(c => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                  </select>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Brand</label>

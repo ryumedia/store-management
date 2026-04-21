@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, CheckSquare, X } from 'lucide-react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, query, orderBy, doc, deleteDoc, addDoc, serverTimestamp, Timestamp, updateDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase';
+import { collection, onSnapshot, query, orderBy, doc, deleteDoc, addDoc, serverTimestamp, Timestamp, updateDoc, where, getDocs } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export default function StockProcessPage() {
   const [processedStocks, setProcessedStocks] = useState<any[]>([]);
@@ -13,9 +14,10 @@ export default function StockProcessPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [userCompanyId, setUserCompanyId] = useState<string | null>(null);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
 
   const [formData, setFormData] = useState({
-    companyId: '',
     date: new Date().toISOString().split('T')[0], // Default hari ini
     productId: '',
     productName: '',
@@ -23,8 +25,29 @@ export default function StockProcessPage() {
     sku: '',
     itemCode: '',
     quantity: 0,
-    poReference: 'PO STOCK'
+    poReference: 'PO STOCK',
+    companyId: '',
   });
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        if (user.email === 'ali@gmail.com') {
+          setIsSuperAdmin(true);
+        } else {
+          const usersRef = collection(db, "users");
+          const q = query(usersRef, where("uid", "==", user.uid));
+          const querySnapshot = await getDocs(q);
+          if (!querySnapshot.empty) {
+            const userDoc = querySnapshot.docs[0].data();
+            setUserCompanyId(userDoc.companyId);
+          }
+        }
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Fetch Companies
   useEffect(() => {
@@ -41,18 +64,25 @@ export default function StockProcessPage() {
 
   // Fetch Products untuk Dropdown
   useEffect(() => {
-    const q = query(collection(db, 'products'), orderBy('name', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    if (loading) return;
+    let productsQuery = query(collection(db, 'products'), orderBy('name', 'asc'));
+    if (!isSuperAdmin && userCompanyId) {
+      productsQuery = query(productsQuery, where('companyId', '==', userCompanyId));
+    }
+    const unsubscribe = onSnapshot(productsQuery, (snapshot) => {
       setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     return () => unsubscribe();
-  }, []);
+  }, [loading, isSuperAdmin, userCompanyId]);
 
   // Fetch Data Realtime
   useEffect(() => {
-    // Mengambil data dari koleksi 'stock_processes'
-    const q = query(collection(db, 'stock_processes'), orderBy('date', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    if (loading) return;
+    let stockProcessesQuery = query(collection(db, 'stock_processes'), orderBy('date', 'desc'));
+    if (!isSuperAdmin && userCompanyId) {
+      stockProcessesQuery = query(stockProcessesQuery, where('companyId', '==', userCompanyId));
+    }
+    const unsubscribe = onSnapshot(stockProcessesQuery, (snapshot) => {
       const list = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -65,7 +95,7 @@ export default function StockProcessPage() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [loading, isSuperAdmin, userCompanyId]);
 
   // Handle Delete
   const handleDelete = async (id: string) => {
@@ -114,7 +144,6 @@ export default function StockProcessPage() {
     if (item) {
       setEditingId(item.id);
       setFormData({
-        companyId: item.companyId || '',
         date: item.date ? new Date(item.date.seconds * 1000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
         productId: item.productId || '',
         productName: item.productName || '',
@@ -122,12 +151,12 @@ export default function StockProcessPage() {
         sku: item.sku || '',
         itemCode: item.itemCode || '',
         quantity: item.quantity || 0,
-        poReference: item.poReference || 'PO STOCK'
+        poReference: item.poReference || 'PO STOCK',
+        companyId: item.companyId || '',
       });
     } else {
       setEditingId(null);
       setFormData({
-        companyId: '',
         date: new Date().toISOString().split('T')[0],
         productId: '',
         productName: '',
@@ -135,7 +164,8 @@ export default function StockProcessPage() {
         sku: '',
         itemCode: '',
         quantity: 0,
-        poReference: 'PO STOCK'
+        poReference: 'PO STOCK',
+        companyId: '',
       });
     }
     setIsModalOpen(true);
@@ -150,6 +180,7 @@ export default function StockProcessPage() {
         ...formData,
         date: Timestamp.fromDate(new Date(formData.date)),
         quantity: Number(formData.quantity),
+        companyId: isSuperAdmin ? formData.companyId : userCompanyId,
       };
 
       if (editingId) {
@@ -165,7 +196,7 @@ export default function StockProcessPage() {
       }
       
       // Reset Form (kecuali tanggal mungkin user ingin input banyak di hari yang sama)
-      setFormData(prev => ({ ...prev, productId: '', productName: '', parentSku: '', sku: '', itemCode: '', quantity: 0 }));
+      setFormData(prev => ({ ...prev, productId: '', productName: '', parentSku: '', sku: '', itemCode: '', quantity: 0, companyId: '' }));
       setEditingId(null);
       setIsModalOpen(false);
     } catch (error) {
@@ -264,6 +295,7 @@ export default function StockProcessPage() {
             </div>
             
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
+              {isSuperAdmin && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
@@ -277,6 +309,7 @@ export default function StockProcessPage() {
                   <input type="date" required value={formData.date} onChange={(e) => setFormData({ ...formData, date: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-secondary focus:outline-none" />
                 </div>
               </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Nama Produk</label>
