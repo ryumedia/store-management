@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, X, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Edit, Trash2, X, RefreshCw, FileUp, Info, CheckCircle } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { db, auth } from '@/lib/firebase';
 import { collection, onSnapshot, query, orderBy, doc, deleteDoc, addDoc, serverTimestamp, updateDoc, where, getDocs } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -19,7 +20,13 @@ export default function ProductPage() {
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [productsPerPage] = useState(10); // Menampilkan 10 produk per halaman
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({
     brandId: '',
@@ -95,16 +102,26 @@ export default function ProductPage() {
 
   // Fetch Data Pengaturan (Brands, Models, Colors, Sizes)
   useEffect(() => {
-    const unsubBrands = onSnapshot(query(collection(db, 'brands'), orderBy('name')), (snap) => {
+    if (loading) return;
+
+    const getMetadataQuery = (colName: string) => {
+      let q = query(collection(db, colName), orderBy('name'));
+      if (!isSuperAdmin && userCompanyId) {
+        q = query(q, where('companyId', '==', userCompanyId));
+      }
+      return q;
+    };
+
+    const unsubBrands = onSnapshot(getMetadataQuery('brands'), (snap) => {
       setBrands(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    const unsubModels = onSnapshot(query(collection(db, 'models'), orderBy('name')), (snap) => {
+    const unsubModels = onSnapshot(getMetadataQuery('models'), (snap) => {
       setModels(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    const unsubColors = onSnapshot(query(collection(db, 'colors'), orderBy('name')), (snap) => {
+    const unsubColors = onSnapshot(getMetadataQuery('colors'), (snap) => {
       setColors(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    const unsubSizes = onSnapshot(query(collection(db, 'sizes'), orderBy('name')), (snap) => {
+    const unsubSizes = onSnapshot(getMetadataQuery('sizes'), (snap) => {
       setSizes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
@@ -114,7 +131,7 @@ export default function ProductPage() {
       unsubColors();
       unsubSizes();
     };
-  }, []);
+  }, [loading, isSuperAdmin, userCompanyId]);
 
   // Handle Delete
   const handleDelete = async (id: string) => {
@@ -161,6 +178,101 @@ export default function ProductPage() {
     setIsModalOpen(true);
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) setSelectedFile(file);
+  };
+
+  const processUpload = async () => {
+    if (!selectedFile) return;
+
+    const targetCompanyId = isSuperAdmin ? formData.companyId : userCompanyId;
+    
+    if (isSuperAdmin && !targetCompanyId) {
+      alert("Sebagai Super Admin, silakan buka modal 'Tambah Produk' dan pilih Company terlebih dahulu agar data yang diunggah memiliki relasi perusahaan yang tepat.");
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setIsSubmitting(true);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'array' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws);
+
+        const existingSkus = new Set(
+          products
+            .filter(p => p.companyId === targetCompanyId)
+            .map(p => p.sku.toUpperCase())
+        );
+
+        let addedCount = 0;
+        let skipCount = 0;
+
+        for (const row of data as any[]) {
+          const sku = (row['SKU.'] || row['SKU'] || '').toString().trim().toUpperCase();
+          
+          if (!sku) continue;
+
+          // Cek duplikat dalam database lokal (produk yang sudah ada + yang sedang diproses)
+          if (existingSkus.has(sku)) {
+            skipCount++;
+            continue;
+          }
+
+          await addDoc(collection(db, 'products'), {
+            name: row['Nama.'] || row['Nama'] || '',
+            sku: sku,
+            itemCode: row['Item Code.'] || row['Item Code'] || '',
+            minQty: Number(row['Min QTY.'] || row['Min QTY'] || 0),
+            hpp: Number(row['HPP.'] || row['HPP'] || 0),
+            price: Number(row['Harga.'] || row['Harga'] || 0),
+            companyId: targetCompanyId,
+            createdAt: serverTimestamp(),
+            brandId: '', modelId: '', colorId: '', sizeId: '', sequenceNumber: ''
+          });
+
+          existingSkus.add(sku);
+          addedCount++;
+        }
+
+        if (skipCount > 0) {
+          alert(`Selesai! ${addedCount} produk berhasil ditambahkan, ${skipCount} produk dilewati karena SKU sudah ada.`);
+        } else {
+          alert(`Berhasil mengunggah ${addedCount} produk ke sistem.`);
+        }
+
+        setIsUploadModalOpen(false);
+        setSelectedFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      } catch (error) {
+        console.error("Error processing excel:", error);
+        alert("Gagal memproses file Excel. Pastikan format dan header kolom sudah sesuai.");
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+    reader.readAsArrayBuffer(selectedFile);
+  };
+
+  // Logika Pencarian
+  const filteredProducts = products.filter(product =>
+    product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    product.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    product.itemCode.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Logika Paginasi
+  const indexOfLastProduct = currentPage * productsPerPage;
+  const indexOfFirstProduct = indexOfLastProduct - productsPerPage;
+  const currentProducts = filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct);
+  const totalPages = Math.ceil(filteredProducts.length / productsPerPage);
+
+  const paginate = (pageNumber: number) => setCurrentPage(pageNumber);
 
   // Logika Otomatisasi Field
   const selectedBrand = brands.find(b => b.id === formData.brandId);
@@ -198,6 +310,21 @@ export default function ProductPage() {
       return;
     }
 
+    const targetCompanyId = isSuperAdmin ? formData.companyId : userCompanyId;
+
+    // Cek duplikat SKU
+    const isSkuDuplicate = products.some(p => 
+      p.sku.toUpperCase() === generatedSKU.toUpperCase() && 
+      p.id !== editingId && 
+      p.companyId === targetCompanyId
+    );
+
+    if (isSkuDuplicate) {
+      alert(`Gagal: SKU "${generatedSKU}" sudah digunakan oleh produk lain di perusahaan ini.`);
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
       const productData = {
           name: generatedName,
@@ -211,7 +338,7 @@ export default function ProductPage() {
           colorId: formData.colorId,
           sizeId: formData.sizeId,
           sequenceNumber: formData.sequenceNumber,
-          companyId: isSuperAdmin ? formData.companyId : userCompanyId,
+          companyId: targetCompanyId,
       };
 
       if (editingId) {
@@ -254,13 +381,43 @@ export default function ProductPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-gray-800">Data Produk</h1>
-        <button
-          className="flex items-center px-4 py-2 bg-secondary text-black rounded-md hover:opacity-90 transition-opacity shadow-sm"
-          onClick={() => handleOpenModal()}
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Tambah Produk
-        </button>
+        <div className="flex items-center space-x-3">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept=".xlsx, .xls"
+            className="hidden"
+          />
+          <button
+            onClick={() => {
+              setSelectedFile(null);
+              setIsUploadModalOpen(true);
+            }}
+            className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50"
+          >
+            <FileUp className="w-4 h-4 mr-2" />
+            Upload Excel
+          </button>
+          <button
+            className="flex items-center px-4 py-2 bg-secondary text-black rounded-md hover:opacity-90 transition-opacity shadow-sm"
+            onClick={() => handleOpenModal()}
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Tambah Produk
+          </button>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="flex justify-end mb-4">
+        <input
+          type="text"
+          placeholder="Cari produk (Nama, SKU, Item Code)..."
+          value={searchTerm}
+          onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} // Reset halaman saat mencari
+          className="w-full md:w-1/3 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-secondary focus:border-transparent"
+        />
       </div>
 
       <div className="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200">
@@ -281,10 +438,10 @@ export default function ProductPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {loading ? (
                 <tr><td colSpan={8} className="px-6 py-4 text-center text-gray-500">Memuat data...</td></tr>
-              ) : products.length === 0 ? (
+              ) : currentProducts.length === 0 ? (
                 <tr><td colSpan={8} className="px-6 py-4 text-center text-gray-500">Belum ada data produk.</td></tr>
               ) : (
-                products.map((product, index) => (
+                currentProducts.map((product, index) => (
                   <tr key={product.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{index + 1}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.name}</td>
@@ -305,6 +462,37 @@ export default function ProductPage() {
         </div>
       </div>
 
+      {/* Pagination Controls */}
+      {filteredProducts.length > productsPerPage && (
+        <div className="flex justify-center items-center space-x-2 mt-4">
+          <button
+            onClick={() => paginate(currentPage - 1)}
+            disabled={currentPage === 1}
+            className="px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Previous
+          </button>
+          {[...Array(totalPages)].map((_, i) => (
+            <button
+              key={i + 1}
+              onClick={() => paginate(i + 1)}
+              className={`px-3 py-1 border rounded-md text-sm font-medium ${
+                currentPage === i + 1 ? 'bg-secondary text-black border-secondary' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              {i + 1}
+            </button>
+          ))}
+          <button
+            onClick={() => paginate(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            className="px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Next
+          </button>
+        </div>
+      )}
+
       {/* Modal Tambah Produk */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
@@ -323,7 +511,12 @@ export default function ProductPage() {
                   <select
                     required
                     value={formData.companyId}
-                    onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
+                    onChange={(e) => setFormData({ 
+                      ...formData, 
+                      companyId: e.target.value,
+                      // Reset dependent fields when company changes
+                      brandId: '', modelId: '', colorId: '', sizeId: ''
+                    })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-secondary focus:border-transparent"
                   >
                     <option value="">Pilih Company</option>
@@ -336,28 +529,40 @@ export default function ProductPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Brand</label>
                   <select required value={formData.brandId} onChange={(e) => setFormData({ ...formData, brandId: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-secondary focus:outline-none">
                     <option value="">Pilih Brand</option>
-                    {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    {brands
+                      .filter(b => !formData.companyId || b.companyId === formData.companyId)
+                      .map(b => <option key={b.id} value={b.id}>{b.name}</option>)
+                    }
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
                   <select required value={formData.modelId} onChange={(e) => setFormData({ ...formData, modelId: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-secondary focus:outline-none">
                     <option value="">Pilih Model</option>
-                    {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    {models
+                      .filter(m => !formData.companyId || m.companyId === formData.companyId)
+                      .map(m => <option key={m.id} value={m.id}>{m.name}</option>)
+                    }
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Warna</label>
                   <select required value={formData.colorId} onChange={(e) => setFormData({ ...formData, colorId: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-secondary focus:outline-none">
                     <option value="">Pilih Warna</option>
-                    {colors.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {colors
+                      .filter(c => !formData.companyId || c.companyId === formData.companyId)
+                      .map(c => <option key={c.id} value={c.id}>{c.name}</option>)
+                    }
                   </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Ukuran</label>
                   <select required value={formData.sizeId} onChange={(e) => setFormData({ ...formData, sizeId: e.target.value })} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-secondary focus:outline-none">
                     <option value="">Pilih Ukuran</option>
-                    {sizes.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {sizes
+                      .filter(s => !formData.companyId || s.companyId === formData.companyId)
+                      .map(s => <option key={s.id} value={s.id}>{s.name}</option>)
+                    }
                   </select>
                 </div>
               </div>
@@ -449,6 +654,85 @@ export default function ProductPage() {
                 <button type="submit" disabled={isSubmitting} className="px-4 py-2 text-sm font-medium text-black bg-secondary rounded-md hover:opacity-90 disabled:opacity-70">{isSubmitting ? 'Menyimpan...' : (editingId ? 'Simpan Perubahan' : 'Simpan Produk')}</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Cara Upload Excel */}
+      {isUploadModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="flex justify-between items-center p-6 border-b bg-gray-50">
+              <div className="flex items-center">
+                <Info className="w-5 h-5 text-blue-600 mr-2" />
+                <h3 className="text-lg font-bold text-gray-900">Petunjuk Upload Excel</h3>
+              </div>
+              <button onClick={() => setIsUploadModalOpen(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-blue-50 border-l-4 border-blue-400 p-4">
+                <p className="text-sm text-blue-700 font-medium mb-2">Pastikan file Anda memenuhi syarat berikut:</p>
+                <ul className="text-xs text-blue-600 space-y-2 list-disc ml-4">
+                  <li>Format file harus <strong>.xlsx</strong> atau <strong>.xls</strong></li>
+                  <li>Header baris pertama harus berisi:<br />
+                    <code className="bg-blue-100 px-1 py-0.5 rounded text-[10px] font-bold block mt-1">
+                      No. Nama. SKU. Item Code. Min QTY. HPP. Harga.
+                    </code>
+                  </li>
+                  <li>Pastikan tidak ada baris kosong di antara data produk.</li>
+                </ul>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`w-full flex flex-col items-center justify-center p-4 border-2 border-dashed rounded-lg transition-colors ${
+                    selectedFile ? 'border-green-400 bg-green-50' : 'border-gray-300 hover:border-secondary bg-gray-50'
+                  }`}
+                >
+                  {selectedFile ? (
+                    <>
+                      <CheckCircle className="w-8 h-8 text-green-500 mb-2" />
+                      <span className="text-sm font-medium text-green-700 truncate max-w-full px-4">{selectedFile.name}</span>
+                      <span className="text-xs text-green-500 mt-1">Klik untuk mengganti file</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileUp className="w-8 h-8 text-gray-400 mb-2" />
+                      <span className="text-sm font-medium text-gray-600">Pilih File Excel</span>
+                      <span className="text-xs text-gray-400 mt-1">Klik untuk mencari file</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {isSuperAdmin && !formData.companyId && (
+                <p className="text-xs text-red-500 italic font-medium">
+                  * Sebagai Super Admin, pastikan Anda telah memilih Company di form "Tambah Produk" terlebih dahulu.
+                </p>
+              )}
+
+              <div className="flex space-x-3 pt-4 border-t border-gray-100">
+                <button 
+                  type="button" 
+                  onClick={() => setIsUploadModalOpen(false)} 
+                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Batal
+                </button>
+                <button 
+                  onClick={processUpload}
+                  disabled={!selectedFile || isSubmitting}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                >
+                  {isSubmitting ? 'Mengunggah...' : 'Unggah Sekarang'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -16,6 +16,9 @@ export default function StockProcessPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [userCompanyId, setUserCompanyId] = useState<string | null>(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [isRemarkModalOpen, setIsRemarkModalOpen] = useState(false);
+  const [remarkValue, setRemarkValue] = useState('');
+  const [selectedItemForFinish, setSelectedItemForFinish] = useState<any>(null);
 
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0], // Default hari ini
@@ -207,6 +210,39 @@ export default function StockProcessPage() {
     }
   };
 
+  // Handle Finish (Move to Incoming Stock)
+  const handleOpenFinishModal = (item: any) => {
+    setSelectedItemForFinish(item);
+    setRemarkValue('');
+    setIsRemarkModalOpen(true);
+  };
+
+  const handleFinishProcess = async () => {
+    if (!selectedItemForFinish) return;
+    setIsSubmitting(true);
+    try {
+      // 1. Tambahkan ke koleksi incoming_stocks
+      const { id, ...rest } = selectedItemForFinish;
+      await addDoc(collection(db, 'incoming_stocks'), {
+        ...rest,
+        remark: remarkValue,
+        createdAt: serverTimestamp()
+      });
+
+      // 2. Hapus dari koleksi stock_processes
+      await deleteDoc(doc(db, 'stock_processes', id));
+
+      setIsRemarkModalOpen(false);
+      setSelectedItemForFinish(null);
+      setRemarkValue('');
+    } catch (error) {
+      console.error("Error moving stock to incoming:", error);
+      alert("Gagal menyelesaikan proses stok.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Helper untuk mendapatkan nama company berdasarkan ID
   const getCompanyName = (id: string) => {
     const company = companies.find(c => c.id === id);
@@ -273,7 +309,7 @@ export default function StockProcessPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-3">
                       <button onClick={() => handleOpenModal(item)} className="text-indigo-600 hover:text-indigo-900 transition-colors" title="Edit"><Edit className="w-4 h-4" /></button>
                       <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:text-red-900 transition-colors" title="Hapus"><Trash2 className="w-4 h-4" /></button>
-                      <button onClick={() => alert('Fitur selesai akan dikonfigurasi.')} className="text-green-600 hover:text-green-900 transition-colors" title="Selesai"><CheckSquare className="w-4 h-4" /></button>
+                      <button onClick={() => handleOpenFinishModal(item)} className="text-green-600 hover:text-green-900 transition-colors" title="Selesai"><CheckSquare className="w-4 h-4" /></button>
                     </td>
                   </tr>
                 ))
@@ -369,6 +405,42 @@ export default function StockProcessPage() {
                 <button type="submit" disabled={isSubmitting} className="px-4 py-2 text-sm font-medium text-black bg-secondary rounded-md hover:opacity-90 disabled:opacity-70">{isSubmitting ? 'Menyimpan...' : (editingId ? 'Simpan Perubahan' : 'Simpan')}</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Remark Selesai */}
+      {isRemarkModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 border-b bg-gray-50 flex justify-between items-center">
+              <h3 className="text-lg font-bold text-gray-900">Selesaikan Proses</h3>
+              <button onClick={() => setIsRemarkModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X className="w-6 h-6" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-gray-600">
+                Anda akan memindahkan <strong>{selectedItemForFinish?.quantity} qty</strong> dari <strong>{selectedItemForFinish?.productName}</strong> ke Stok Masuk. Silakan isi catatan jika diperlukan.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Remark / Catatan</label>
+                <textarea
+                  required
+                  value={remarkValue}
+                  onChange={(e) => setRemarkValue(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-secondary focus:outline-none"
+                  rows={3}
+                  placeholder="Contoh: Barang sudah sampai gudang, Kualitas OK"
+                />
+              </div>
+              <div className="flex justify-end space-x-3 pt-4">
+                <button type="button" onClick={() => setIsRemarkModalOpen(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+                  Batal
+                </button>
+                <button onClick={handleFinishProcess} disabled={isSubmitting || !remarkValue} className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-70 shadow-sm">
+                  {isSubmitting ? 'Memproses...' : 'Lanjutkan'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
