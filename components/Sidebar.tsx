@@ -47,7 +47,17 @@ const Sidebar = ({ user }: { user: User | null }) => {
         { name: "Monitoring Stok", path: "/stok/monitoring" },
       ],
     },
-    { name: "Pesanan", icon: ShoppingCart, path: "/orders" },
+    {
+      name: "Pesanan",
+      icon: ShoppingCart,
+      path: "/pesanan",
+      children: [
+        { name: "Shopee", path: "/pesanan/shopee" },
+        { name: "Tiktok", path: "/pesanan/tiktok" },
+        { name: "Mengantar", path: "/pesanan/mengantar" },
+        { name: "Website", path: "/pesanan/website" },
+      ],
+    },
     { name: "Pelanggan", icon: Users, path: "/customers" },
   ];
 
@@ -74,7 +84,7 @@ const Sidebar = ({ user }: { user: User | null }) => {
       <div className="h-20 flex items-center justify-center bg-gray-900">
         <h1 className="text-2xl font-bold text-primary">StoreApp</h1>
       </div>
-      <nav className="flex-grow">
+      <nav className="flex-grow overflow-y-auto">
         <ul>
           {menuItems.map((item) => {
             if (item.children) {
